@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 
 import anthropic
@@ -11,6 +12,8 @@ from spot_product_collateral.pocketbase_client import PocketBaseClient
 from spot_product_collateral.state import State
 from spot_product_collateral.upc_lookup import lookup_upc
 from spot_product_collateral.verifier import verify_manifest
+
+logger = logging.getLogger(__name__)
 
 
 def _download_image(url: str):
@@ -45,7 +48,10 @@ def run_once(config, bottlepos_items: list, state_path: str, manifest_path: str)
             if upc_result.image_url:
                 try:
                     files = _download_image(upc_result.image_url)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to download image %s: %s", upc_result.image_url, exc
+                    )
                     files = None
 
             pb_client.upsert_by_upc("products", item.code, fields, files=files)

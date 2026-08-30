@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from spot_product_collateral.config import Config
 from spot_product_collateral.run import run_once
+from spot_product_collateral.state import State
 from spot_product_collateral.upc_lookup import UpcLookupResult
 from spot_product_collateral.crawler import TastingProfileResult
 
@@ -71,3 +72,83 @@ def test_run_once_records_per_item_error_without_aborting(pb_server, tmp_path):
     assert manifest["items"] == []
     assert len(manifest["errors"]) == 1
     assert "boom" in manifest["errors"][0]["error"]
+
+
+def test_run_once_continues_when_image_download_fails(pb_server, tmp_path):
+    config = _config()
+    config.pocketbase_url = pb_server.base_url
+    state_path = str(tmp_path / "STATE.json")
+    manifest_path = str(tmp_path / "manifest.json")
+
+    with patch("spot_product_collateral.run.lookup_upc") as mock_lookup, \
+         patch("spot_product_collateral.run.crawl_tasting_profile") as mock_crawl, \
+         patch("spot_product_collateral.run.anthropic.Anthropic") as mock_anthropic, \
+         patch("spot_product_collateral.run._download_image") as mock_download:
+        mock_lookup.return_value = UpcLookupResult(
+            found=True, name="Example Wine", description="desc",
+            image_url="https://example.com/image.jpg",
+        )
+        mock_crawl.return_value = TastingProfileResult(found=True, tasting_profile="40% ABV", sources=["https://x"])
+        mock_anthropic.return_value = SimpleNamespace(messages=None)
+        mock_download.side_effect = RuntimeError("image download failed")
+
+        manifest = run_once(config, [_item()], state_path, manifest_path)
+
+    assert manifest["errors"] == []
+    assert len(manifest["items"]) == 1
+    assert manifest["items"][0]["upc"] == "111"
+    assert manifest["items"][0]["status"] == "published"
+
+
+def test_run_once_continues_past_per_item_failure_to_next_item(pb_server, tmp_path):
+    config = _config()
+    config.pocketbase_url = pb_server.base_url
+    state_path = str(tmp_path / "STATE.json")
+    manifest_path = str(tmp_path / "manifest.json")
+
+    def lookup_side_effect(code, *args, **kwargs):
+        if code == "111":
+            raise RuntimeError("boom")
+        return UpcLookupResult(found=True, name="Second Wine", description="desc2", image_url=None)
+
+    with patch("spot_product_collateral.run.lookup_upc") as mock_lookup, \
+         patch("spot_product_collateral.run.crawl_tasting_profile") as mock_crawl, \
+         patch("spot_product_collateral.run.anthropic.Anthropic") as mock_anthropic:
+        mock_lookup.side_effect = lookup_side_effect
+        mock_crawl.return_value = TastingProfileResult(found=True, tasting_profile="40% ABV", sources=["https://x"])
+        mock_anthropic.return_value = SimpleNamespace(messages=None)
+
+        items = [_item(code="111", item_id=1), _item(code="222", item_id=2)]
+        manifest = run_once(config, items, state_path, manifest_path)
+
+    assert len(manifest["errors"]) == 1
+    assert manifest["errors"][0]["upc"] == "111"
+    assert "boom" in manifest["errors"][0]["error"]
+
+    assert len(manifest["items"]) == 1
+    assert manifest["items"][0]["upc"] == "222"
+
+
+def test_run_once_increments_failures_and_preserves_last_run_on_verify_failure(pb_server, tmp_path):
+    config = _config()
+    config.pocketbase_url = pb_server.base_url
+    state_path = str(tmp_path / "STATE.json")
+    manifest_path = str(tmp_path / "manifest.json")
+
+    State(consecutive_failures=0, last_run=None, last_run_id=None).save(state_path)
+
+    with patch("spot_product_collateral.run.lookup_upc") as mock_lookup, \
+         patch("spot_product_collateral.run.crawl_tasting_profile") as mock_crawl, \
+         patch("spot_product_collateral.run.anthropic.Anthropic") as mock_anthropic, \
+         patch("spot_product_collateral.run.verify_manifest") as mock_verify:
+        mock_lookup.return_value = UpcLookupResult(found=True, name="Example Wine", description="desc", image_url=None)
+        mock_crawl.return_value = TastingProfileResult(found=True, tasting_profile="40% ABV", sources=["https://x"])
+        mock_anthropic.return_value = SimpleNamespace(messages=None)
+        mock_verify.return_value = False
+
+        run_once(config, [_item()], state_path, manifest_path)
+
+    saved_state = State.load(state_path)
+    assert saved_state.consecutive_failures == 1
+    assert saved_state.last_run is None
+    assert saved_state.last_run_id is None
