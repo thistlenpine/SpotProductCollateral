@@ -1,3 +1,5 @@
+import json
+
 from spot_product_collateral.pocketbase_client import PocketBaseClient
 
 
@@ -59,6 +61,49 @@ def test_create_record_with_files(pb_server):
     # Verify we can find it
     found = client.find_by_upc("products", "555")
     assert found["name"] == "Wine with Image"
+
+
+def test_create_record_with_files_encodes_lists_as_json_and_drops_none(pb_server):
+    """Multipart requests must JSON-encode container values and drop None values."""
+    client = _client(pb_server)
+    created = client.create_record(
+        "products",
+        {
+            "upc": "777",
+            "name": "Wine with Image",
+            "sources": ["https://a", "https://b"],
+            "abv": None,
+        },
+        files={"image": ("test.jpg", b"fake-image-bytes", "image/jpeg")},
+    )
+
+    stored = pb_server.records["products"][created["id"]]
+
+    # The list arrived as a JSON string, not a Python repr.
+    assert stored["sources"] == '["https://a", "https://b"]'
+    assert json.loads(stored["sources"]) == ["https://a", "https://b"]
+
+    # The None-valued field was dropped from the request entirely.
+    assert "abv" not in stored
+
+    assert stored["upc"] == "777"
+    assert stored["name"] == "Wine with Image"
+
+
+def test_update_record_with_files_encodes_lists_as_json_and_drops_none(pb_server):
+    client = _client(pb_server)
+    created = client.create_record("products", {"upc": "888", "name": "Before"})
+    client.update_record(
+        "products",
+        created["id"],
+        {"name": "After", "sources": ["https://c"], "abv": None},
+        files={"image": ("test.jpg", b"fake-image-bytes", "image/jpeg")},
+    )
+
+    stored = pb_server.records["products"][created["id"]]
+    assert stored["name"] == "After"
+    assert json.loads(stored["sources"]) == ["https://c"]
+    assert "abv" not in stored
 
 
 def test_upsert_by_upc_with_files(pb_server):

@@ -1,4 +1,6 @@
 # tests/test_upc_lookup.py
+import pytest
+
 from spot_product_collateral.upc_lookup import lookup_upc
 
 
@@ -50,11 +52,12 @@ def test_lookup_no_items_returns_not_found():
     assert result.found is False
 
 
-def test_lookup_rate_limited_returns_not_found():
+def test_lookup_rate_limited_raises():
+    """A 429 is 'we couldn't check', not 'nothing found' — it must raise."""
     response = _FakeResponse(429, {})
     session = _FakeSession(response)
-    result = lookup_upc("000000000000", session=session)
-    assert result.found is False
+    with pytest.raises(RuntimeError):
+        lookup_upc("000000000000", session=session)
 
 
 def test_lookup_no_images_leaves_image_url_none():

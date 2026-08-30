@@ -57,8 +57,13 @@ read-state → discover → act → verify → write-state sequence.
 
 - Gate G1 in `HUMAN-GATES.md` must be cleared before the recurring trigger is
   created.
-- Since no human is present for the scheduled run, a newly-triggered gate
-  gets recorded in `STATE.json` and the run stops rather than self-clearing —
-  the next run stays blocked until a human clears it.
+- Since no human is present for the scheduled run, a tripped gate simply stops
+  the run rather than self-clearing: `run_once` increments
+  `consecutive_failures` in `STATE.json`, `main.py` prints the reason to stderr
+  and exits non-zero, and `run_weekly.ps1` propagates that exit code so Task
+  Scheduler records the run as failed. There is no separate structured
+  gate-request record in `STATE.json` — a human diagnoses the halt from the
+  `consecutive_failures` count in `STATE.json` plus the stderr messages in
+  `run_weekly.log`, then resets the counter by hand.
 - The budget/stop limit (10 consecutive failures) in `HUMAN-GATES.md` takes
   precedence over the weekly cadence.

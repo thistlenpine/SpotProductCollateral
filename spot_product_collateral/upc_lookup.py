@@ -18,7 +18,11 @@ def lookup_upc(upc: str, session=None) -> UpcLookupResult:
     session = session or requests
     resp = session.get(UPCITEMDB_TRIAL_URL, params={"upc": upc}, timeout=10)
     if resp.status_code == 429:
-        return UpcLookupResult(found=False)
+        # "We couldn't check" is not "there's nothing to find". Raising lets
+        # run.py's per-item handler record an error instead of writing a
+        # needs_review record stamped with today's snapshot hash — which would
+        # make the item look up-to-date and skip it on every future scan.
+        raise RuntimeError(f"UPC lookup rate-limited for {upc}")
     resp.raise_for_status()
     data = resp.json()
     items = data.get("items") or []

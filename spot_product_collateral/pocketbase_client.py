@@ -1,4 +1,25 @@
+import json
+
 import requests
+
+
+def _multipart_fields(fields: dict) -> dict:
+    """Normalize a fields dict for `requests`' multipart form encoding.
+
+    `requests` str()-reprs list/dict values (producing invalid JSON for
+    PocketBase `json`-typed fields) and silently drops `None` values. Encode
+    containers as JSON and drop `None` keys outright — PocketBase treats an
+    absent multipart field as "leave unset"/"use default".
+    """
+    prepared = {}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, (list, dict)):
+            prepared[key] = json.dumps(value)
+        else:
+            prepared[key] = value
+    return prepared
 
 
 class PocketBaseClient:
@@ -37,7 +58,7 @@ class PocketBaseClient:
         if files:
             resp = requests.post(
                 f"{self.base_url}/api/collections/{collection}/records",
-                data=fields, files=files, headers=self._headers(), timeout=30,
+                data=_multipart_fields(fields), files=files, headers=self._headers(), timeout=30,
             )
         else:
             resp = requests.post(
@@ -51,7 +72,7 @@ class PocketBaseClient:
         if files:
             resp = requests.patch(
                 f"{self.base_url}/api/collections/{collection}/records/{record_id}",
-                data=fields, files=files, headers=self._headers(), timeout=30,
+                data=_multipart_fields(fields), files=files, headers=self._headers(), timeout=30,
             )
         else:
             resp = requests.patch(
