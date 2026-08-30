@@ -1,5 +1,6 @@
 import json
 import threading
+from email import message_from_bytes
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -34,7 +35,48 @@ class _Handler(BaseHTTPRequestHandler):
     def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
-        return json.loads(raw or b"{}")
+        content_type = self.headers.get("Content-Type", "application/json")
+
+        if content_type.startswith("multipart/form-data"):
+            # Parse multipart form data
+            return self._parse_multipart(raw, content_type)
+        else:
+            # Parse as JSON
+            return json.loads(raw or b"{}")
+
+    def _parse_multipart(self, raw: bytes, content_type: str) -> dict:
+        """Parse multipart/form-data body and extract non-file fields."""
+        # Extract boundary from Content-Type header
+        # Format: multipart/form-data; boundary=----boundary123
+        boundary_prefix = "boundary="
+        boundary_idx = content_type.find(boundary_prefix)
+        if boundary_idx == -1:
+            return {}
+        boundary = content_type[boundary_idx + len(boundary_prefix):].split(";")[0].strip()
+
+        # Construct the full message with headers for email.message_from_bytes parsing
+        # The raw body doesn't include the HTTP request headers, so we need to add them
+        full_message = b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + raw
+        msg = message_from_bytes(full_message)
+
+        fields = {}
+        # Iterate through all parts
+        if msg.is_multipart():
+            for part in msg.get_payload():
+                content_disposition = part.get("Content-Disposition", "")
+                if "form-data" in content_disposition:
+                    # Extract field name
+                    name_start = content_disposition.find('name="')
+                    if name_start != -1:
+                        name_start += 6
+                        name_end = content_disposition.find('"', name_start)
+                        if name_end != -1:
+                            field_name = content_disposition[name_start:name_end]
+                            # Only capture non-file fields (those without filename=)
+                            if "filename=" not in content_disposition:
+                                fields[field_name] = part.get_payload(decode=True).decode("utf-8")
+
+        return fields
 
     def do_POST(self):
         store = self.server.store

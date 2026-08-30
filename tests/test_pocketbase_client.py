@@ -44,3 +44,30 @@ def test_upsert_by_upc_updates_when_present(pb_server):
     record = client.upsert_by_upc("products", "444", {"name": "After"})
     assert record["name"] == "After"
     assert len(pb_server.records["products"]) == 1
+
+
+def test_create_record_with_files(pb_server):
+    client = _client(pb_server)
+    created = client.create_record(
+        "products",
+        {"upc": "555", "name": "Wine with Image"},
+        files={"image": ("test.jpg", b"fake-image-bytes", "image/jpeg")}
+    )
+    assert created["upc"] == "555"
+    assert created["name"] == "Wine with Image"
+    assert created["id"]
+    # Verify we can find it
+    found = client.find_by_upc("products", "555")
+    assert found["name"] == "Wine with Image"
+
+
+def test_upsert_by_upc_with_files(pb_server):
+    client = _client(pb_server)
+    record = client.upsert_by_upc(
+        "products",
+        "666",
+        {"name": "New Wine with Image"},
+        files={"image": ("test.jpg", b"fake-image-bytes", "image/jpeg")}
+    )
+    assert record["upc"] == "666"
+    assert record["name"] == "New Wine with Image"
