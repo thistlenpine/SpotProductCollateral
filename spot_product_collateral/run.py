@@ -37,7 +37,17 @@ def run_once(config, bottlepos_items: list, state_path: str, manifest_path: str)
         "errors": [],
     }
 
-    pending = find_items_needing_enrichment(bottlepos_items, pb_client)
+    # Outer safety net for the scan step itself: if it raises (PocketBase
+    # unreachable, malformed BottlePOS data), we still write a manifest and
+    # update State so consecutive_failures actually increments. The per-item
+    # try/except below is unchanged and still handles individual failures.
+    try:
+        pending = find_items_needing_enrichment(bottlepos_items, pb_client)
+    except Exception as exc:
+        logger.exception("Scan step failed")
+        manifest["errors"].append({"upc": None, "error": f"scan failed: {exc}"})
+        pending = []
+
     for item, item_hash in pending:
         try:
             upc_result = lookup_upc(item.code)
@@ -59,11 +69,13 @@ def run_once(config, bottlepos_items: list, state_path: str, manifest_path: str)
         except Exception as exc:
             manifest["errors"].append({"upc": getattr(item, "code", None), "error": str(exc)})
 
+    manifest["verified"] = verify_manifest(manifest)
+
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
     state = State.load(state_path)
-    if verify_manifest(manifest):
+    if manifest["verified"]:
         state.consecutive_failures = 0
         state.last_run = now.isoformat()
         state.last_run_id = run_id
